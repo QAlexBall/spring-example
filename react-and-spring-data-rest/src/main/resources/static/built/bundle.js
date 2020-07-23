@@ -34106,6 +34106,10 @@ var ReactDOM = __webpack_require__(/*! react-dom */ "./node_modules/react-dom/in
 
 var client = __webpack_require__(/*! ./client */ "./src/main/js/client.js");
 
+var follow = __webpack_require__(/*! ./follow */ "./src/main/js/follow.js");
+
+var root = '/api';
+
 var App = /*#__PURE__*/function (_React$Component) {
   _inherits(App, _React$Component);
 
@@ -34126,14 +34130,38 @@ var App = /*#__PURE__*/function (_React$Component) {
   _createClass(App, [{
     key: "componentDidMount",
     value: function componentDidMount() {
+      // client({method: 'GET', path: '/api/employees'}).done(response => {
+      // 	this.setState({employees: response.entity._embedded.employees});
+      // });
+      this.loadFromServer(this.state.pageSize);
+    }
+  }, {
+    key: "loadFromServer",
+    value: function loadFromServer(pageSize) {
       var _this2 = this;
 
-      client({
-        method: 'GET',
-        path: '/api/employees'
-      }).done(function (response) {
+      follow(client, root, [{
+        rel: 'employees',
+        params: {
+          size: pageSize
+        }
+      }]).then(function (employeeCollection) {
+        return client({
+          method: 'GET',
+          path: employeeCollection.entity._links.profile.href,
+          headers: {
+            'Accept': 'application/schema+json'
+          }
+        }).then(function (schema) {
+          _this2.schema = schema.entity;
+          return employeeCollection;
+        });
+      }).done(function (employeeCollection) {
         _this2.setState({
-          employees: response.entity._embedded.employees
+          employees: employeeCollection.entity._embedded.employees,
+          attributes: Object.keys(_this2.schema.properties),
+          pageSize: pageSize,
+          links: employeeCollection.entity._links
         });
       });
     }
@@ -34149,15 +34177,77 @@ var App = /*#__PURE__*/function (_React$Component) {
   return App;
 }(React.Component);
 
-var EmployeeList = /*#__PURE__*/function (_React$Component2) {
-  _inherits(EmployeeList, _React$Component2);
+var CreateDialog = /*#__PURE__*/function (_React$Component2) {
+  _inherits(CreateDialog, _React$Component2);
 
-  var _super2 = _createSuper(EmployeeList);
+  var _super2 = _createSuper(CreateDialog);
+
+  function CreateDialog(props) {
+    var _this3;
+
+    _classCallCheck(this, CreateDialog);
+
+    _this3 = _super2.call(this, props);
+    _this3.handleSubmit = _this3.handleSubmit.bind(_assertThisInitialized(_this3));
+    return _this3;
+  }
+
+  _createClass(CreateDialog, [{
+    key: "handleSubmit",
+    value: function handleSubmit(e) {
+      var _this4 = this;
+
+      e.prevDefault();
+      var newEmployee = {};
+      this.props.attributes.forEach(function (attribute) {
+        newEmployee[attribute] = ReactDOM.findDOMNode(_this4.refs[attribute]).value.trim();
+      });
+      this.props.onCreate(newEmployee);
+      this.props.attributes.forEach(function (attribute) {
+        ReactDOM.findDOMNode(_this4.refs[attribute]).value = '';
+      });
+      window.location = "#";
+    }
+  }, {
+    key: "render",
+    value: function render() {
+      var inputs = this.props.attributes.map(function (attribute) {
+        return /*#__PURE__*/React.createElement("p", {
+          key: attribute
+        }, /*#__PURE__*/React.createElement("input", {
+          type: "text",
+          placeholder: attribute,
+          ref: attribute,
+          className: "field"
+        }));
+      });
+      return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("a", {
+        href: "#createEmployee"
+      }, "Create"), /*#__PURE__*/React.createElement("div", {
+        id: "createEmployee",
+        className: "modalDialog"
+      }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("a", {
+        href: "#",
+        title: "Close",
+        className: "close"
+      }, "X"), /*#__PURE__*/React.createElement("h2", null, "Create new employee"), /*#__PURE__*/React.createElement("form", null, inputs, /*#__PURE__*/React.createElement("button", {
+        onClick: this.handleSubmit
+      }, "Create")))));
+    }
+  }]);
+
+  return CreateDialog;
+}(React.Component);
+
+var EmployeeList = /*#__PURE__*/function (_React$Component3) {
+  _inherits(EmployeeList, _React$Component3);
+
+  var _super3 = _createSuper(EmployeeList);
 
   function EmployeeList() {
     _classCallCheck(this, EmployeeList);
 
-    return _super2.apply(this, arguments);
+    return _super3.apply(this, arguments);
   }
 
   _createClass(EmployeeList, [{
@@ -34176,15 +34266,15 @@ var EmployeeList = /*#__PURE__*/function (_React$Component2) {
   return EmployeeList;
 }(React.Component);
 
-var Employee = /*#__PURE__*/function (_React$Component3) {
-  _inherits(Employee, _React$Component3);
+var Employee = /*#__PURE__*/function (_React$Component4) {
+  _inherits(Employee, _React$Component4);
 
-  var _super3 = _createSuper(Employee);
+  var _super4 = _createSuper(Employee);
 
   function Employee() {
     _classCallCheck(this, Employee);
 
-    return _super3.apply(this, arguments);
+    return _super4.apply(this, arguments);
   }
 
   _createClass(Employee, [{
@@ -34233,6 +34323,55 @@ module.exports = rest.wrap(mime, {
     'Accept': 'application/hal+json'
   }
 });
+
+/***/ }),
+
+/***/ "./src/main/js/follow.js":
+/*!*******************************!*\
+  !*** ./src/main/js/follow.js ***!
+  \*******************************/
+/*! no static exports found */
+/***/ (function(module, exports) {
+
+module.exports = function follow(api, rootPath, relArray) {
+  var root = api({
+    method: 'GET',
+    path: rootPath
+  });
+  return relArray.reduce(function (root, arrayItem) {
+    var rel = typeof arrayItem === 'string' ? arrayItem : arrayItem.rel;
+    return traverseNext(root, rel, arrayItem);
+  }, root);
+
+  function traverseNext(root, rel, arrayItem) {
+    return root.then(function (response) {
+      if (hasEmbeddedRel(response.entity, rel)) {
+        return response.entity._embedded[rel];
+      }
+
+      if (!response.entity._links) {
+        return [];
+      }
+
+      if (typeof arrayItem === 'string') {
+        return api({
+          method: 'GET',
+          path: response.entity._links[rel].href
+        });
+      } else {
+        return api({
+          method: 'GET',
+          path: response.entity._links[rel].href,
+          params: arrayItem.params
+        });
+      }
+    });
+  }
+
+  function hasEmbeddedRel(entity, rel) {
+    return entity._embedded && entity._embedded.hasOwnProperty(rel);
+  }
+};
 
 /***/ }),
 
